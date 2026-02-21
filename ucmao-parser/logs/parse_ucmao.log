@@ -1,0 +1,20 @@
+2026-02-19 23:58:55,808 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5001
+ * Running on http://192.168.10.2:5001
+2026-02-19 23:58:55,808 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-02-20 00:04:47,659 - configs.logging_config - ERROR - sequence item 0: expected str instance, NoneType found
+2026-02-20 00:04:47,660 - werkzeug - INFO - 127.0.0.1 - - [20/Feb/2026 00:04:47] "[35m[1mPOST /api/parse HTTP/1.1[0m" 500 -
+2026-02-20 00:06:20,225 - configs.logging_config - ERROR - sequence item 0: expected str instance, NoneType found
+2026-02-20 00:06:20,225 - werkzeug - INFO - 127.0.0.1 - - [20/Feb/2026 00:06:20] "[35m[1mPOST /api/parse HTTP/1.1[0m" 500 -
+2026-02-20 00:06:21,844 - configs.logging_config - ERROR - sequence item 0: expected str instance, NoneType found
+2026-02-20 00:06:21,845 - werkzeug - INFO - 127.0.0.1 - - [20/Feb/2026 00:06:21] "[35m[1mPOST /api/parse HTTP/1.1[0m" 500 -
+2026-02-20 12:06:33,101 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5001
+ * Running on http://192.168.10.2:5001
+2026-02-20 12:06:33,102 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-02-20 12:08:14,730 - configs.logging_config - ERROR - sequence item 0: expected str instance, NoneType found
+2026-02-20 12:08:14,731 - werkzeug - INFO - 127.0.0.1 - - [20/Feb/2026 12:08:14] "[35m[1mPOST /api/parse HTTP/1.1[0m" 500 -
+2026-02-20 12:10:10,686 - configs.logging_config - ERROR - sequence item 0: expected str instance, NoneType found
+2026-02-20 12:10:10,687 - werkzeug - INFO - 127.0.0.1 - - [20/Feb/2026 12:10:10] "[35m[1mPOST /api/parse HTTP/1.1[0m" 500 -
