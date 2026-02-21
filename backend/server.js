@@ -39,15 +39,14 @@ connectDB();
 // 安全中间件
 app.use(helmet());
 
-// CORS配置（允许微信小程序域名和前端开发服务器）
+// CORS 配置：生产环境放宽（方便发链接给朋友玩）；开发仅允许 localhost + 微信
 app.use(cors({
   origin: function (origin, callback) {
-    // 允许微信小程序请求（微信小程序没有origin）
-    // 允许前端开发服务器（localhost:5173）
-    if (!origin || 
-        origin.includes('servicewechat.com') || 
-        origin.includes('localhost') ||
-        origin.includes('127.0.0.1')) {
+    if (process.env.NODE_ENV === 'production') {
+      callback(null, true);
+      return;
+    }
+    if (!origin || origin.includes('servicewechat.com') || origin.includes('localhost') || origin.includes('127.0.0.1')) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -79,10 +78,24 @@ app.use('/api/recipe', recipeRoutes);
 app.use('/api/favorite', favoriteRoutes);
 app.use('/api/inspiration', inspirationRoutes);
 
+// 生产环境：托管前端静态文件（一体部署，一个链接即可用）
+if (process.env.NODE_ENV === 'production') {
+  const distPath = path.join(__dirname, '..', 'frontend', 'dist');
+  if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) return next();
+      res.sendFile(path.join(distPath, 'index.html'), (err) => {
+        if (err) next(err);
+      });
+    });
+  }
+}
+
 // 每日 6:00 更新灵感（需配置 DASHSCOPE_API_KEY）
 cron.schedule('0 6 * * *', () => runDailyInspiration(), { timezone: 'Asia/Shanghai' });
 
-// 404处理
+// 404 处理（仅 API；静态与 SPA 已在上面处理）
 app.use((req, res) => {
   res.status(404).json({ error: '接口不存在' });
 });

@@ -1,6 +1,11 @@
 // API 服务层 - 连接后端
-// Vite 使用 import.meta.env 而不是 process.env
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+// 生产且未设置 VITE_API_URL 时用空字符串（同源，一体部署）；开发默认 localhost:3000
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== ''
+    ? import.meta.env.VITE_API_URL
+    : import.meta.env.PROD
+      ? ''
+      : 'http://localhost:3000';
 
 interface ApiResponse<T> {
   success: boolean;
