@@ -4,7 +4,7 @@ import {
   ChevronLeft, Bookmark, Heart, 
   Sparkles, Sunrise, Sun, 
   Moon, Compass, Clock, ChevronRight,
-  Video, Plus, Zap, FileText, Search
+  Video, Plus, Zap, FileText, Search, Pencil, Check, X
 } from 'lucide-react';
 import { apiService, Recipe } from './services/api';
 
@@ -129,6 +129,10 @@ export default function App() {
   const [showDeleteModal, setShowDeleteModal] = useState<string | null>(null);
   const [showSaveGuide, setShowSaveGuide] = useState(false);
   const [loadingInspiration, setLoadingInspiration] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editForm, setEditForm] = useState<{ title: string; description: string; time: string; type: string; ingredients: string[]; steps: string[]; tips: string }>({ title: '', description: '', time: '', type: '其他', ingredients: [], steps: [], tips: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [detailSource, setDetailSource] = useState<'inspiration' | 'favorites' | 'generate'>('generate');
 
   // Toast 逻辑
   const showToast = (msg: string) => {
@@ -154,12 +158,18 @@ export default function App() {
     setLoadingInspiration(true);
     try {
       const data = await apiService.getInspirationList();
-      if (data && data.length > 0) {
-        setInspirations(data);
+      const fromApi = Array.isArray(data) ? data : [];
+      const cats: ('早餐' | '午餐' | '晚餐')[] = ['早餐', '午餐', '晚餐'];
+      const merged: Recipe[] = [];
+      for (const cat of cats) {
+        const apiItems = fromApi.filter(i => (i.type || '其他') === cat);
+        const staticItems = INSPIRATIONS.filter(i => i.type === cat);
+        merged.push(...(apiItems.length > 0 ? apiItems : staticItems));
       }
+      setInspirations(merged);
     } catch (e: any) {
       console.warn('加载灵感失败，使用静态数据:', e.message);
-      // 失败时使用静态数据
+      setInspirations(INSPIRATIONS);
     } finally {
       setLoadingInspiration(false);
     }
@@ -209,18 +219,18 @@ export default function App() {
       };
 
       setSelectedRecipe(formattedRecipe);
+      setIsEditMode(false);
+      setDetailSource('generate');
       setView('detail');
-      
-      // 检查是否已收藏
       try {
         const isFav = await apiService.checkFavorite(formattedRecipe.id);
         setShowSaveGuide(!isFav);
       } catch (e) {
         setShowSaveGuide(true);
       }
-      
       setVideoLink('');
-      showToast('✨ 菜谱生成成功！');
+      const isFallback = (recipe as Recipe & { isFallback?: boolean }).isFallback;
+      showToast(isFallback ? '⚠️ AI 暂时不可用，当前为示例菜谱，可编辑后使用' : '✨ 菜谱生成成功！');
     } catch (e: any) {
       console.error('生成菜谱失败:', e);
       setView('main');
@@ -230,6 +240,8 @@ export default function App() {
 
   // 打开菜谱详情（收藏列表只含部分字段，缺食材/步骤时拉取完整详情）
   const openRecipe = async (recipe: Recipe) => {
+    setIsEditMode(false);
+    setDetailSource(tab === 'inspiration' ? 'inspiration' : tab === 'saved' ? 'favorites' : 'generate');
     const raw = recipe as Recipe & { _id?: string };
     const id = String(raw.id ?? raw._id ?? '');
     const hasFullDetail = Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0 &&
@@ -290,20 +302,33 @@ export default function App() {
     }
   };
 
-  // 收藏逻辑（调用后端 API）
+  // 是否为后端真实菜谱 id（24 位 hex）
+  const isBackendRecipeId = (id: string) => /^[a-f0-9]{24}$/i.test(String(id || ''));
+
+  // 收藏逻辑（灵感/静态菜谱先创建再收藏，后端菜谱直接收藏）
   const handleSave = async () => {
     if (!selectedRecipe) return;
     
     try {
-      const isFav = favorites.find(r => r.id === selectedRecipe.id);
+      let recipeId = String(selectedRecipe.id || '');
+      let recipeToSave = selectedRecipe;
+
+      if (!isBackendRecipeId(recipeId)) {
+        const created = await apiService.createRecipeFromInspiration(selectedRecipe);
+        recipeId = created.id;
+        recipeToSave = { ...selectedRecipe, id: recipeId };
+        setSelectedRecipe(recipeToSave);
+      }
+
+      const isFav = favorites.find(r => r.id === recipeId);
       if (isFav) {
         showToast('✨ 这道菜已经在收藏夹啦！');
         return;
       }
 
-      const success = await apiService.addFavorite(selectedRecipe.id);
+      const success = await apiService.addFavorite(recipeId);
       if (success) {
-        setFavorites(prev => [...prev, selectedRecipe]);
+        setFavorites(prev => [...prev, recipeToSave]);
         setShowSaveGuide(false);
         showToast('✨ 已收藏到我的碗里！');
       } else {
@@ -332,6 +357,48 @@ export default function App() {
     }
   };
 
+  const canEditRecipe = selectedRecipe?.id && /^[a-f0-9]{24}$/i.test(String(selectedRecipe.id)) && detailSource !== 'inspiration';
+  const startEdit = () => {
+    if (!selectedRecipe) return;
+    setEditForm({
+      title: selectedRecipe.title ?? '',
+      description: selectedRecipe.description ?? '',
+      time: selectedRecipe.time ?? '',
+      type: selectedRecipe.type ?? '其他',
+      ingredients: [...(selectedRecipe.ingredients ?? [])],
+      steps: [...(selectedRecipe.steps ?? [])],
+      tips: selectedRecipe.tips ?? '',
+    });
+    setIsEditMode(true);
+  };
+  const cancelEdit = () => setIsEditMode(false);
+  const saveEdit = async () => {
+    if (!selectedRecipe?.id || !canEditRecipe) {
+      showToast('该菜谱为示例，无法保存编辑');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const updated = await apiService.updateRecipe(selectedRecipe.id, {
+        title: editForm.title,
+        description: editForm.description,
+        time: editForm.time,
+        type: editForm.type as Recipe['type'],
+        ingredients: editForm.ingredients,
+        steps: editForm.steps,
+        tips: editForm.tips,
+      });
+      setSelectedRecipe({ ...selectedRecipe, ...updated });
+      setIsEditMode(false);
+      showToast('已保存修改 ✨');
+      setFavorites(prev => prev.map(r => r.id === selectedRecipe.id ? { ...r, ...updated } : r));
+    } catch (e: any) {
+      showToast(e.message || '保存失败，请重试');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   // 获取基于时间的问候语
   const getTimeInfo = () => {
     const hour = new Date().getHours();
@@ -356,51 +423,68 @@ export default function App() {
           </div>
         </div>
 
-        {/* 内容区：探索 tab 一屏不滑动，灵感/收藏可滑动 */}
-        <div className="flex-1 overflow-hidden relative bg-[#FAFAFB]">
-          <AnimatePresence mode="wait">
-            {view === 'main' && (
-              <div className={`h-full no-scrollbar ${tab === 'explore' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
-                {/* Tab: 探索 - 一屏内不滑动 */}
+        {/* 主内容区 */}
+        <div className="flex-1 overflow-hidden relative">
+          {/* 灵动装饰背景 */}
+          <div className="absolute inset-0 bg-gradient-to-br from-[#FFF8F0] via-white to-[#FFF5E8]">
+            <div className="absolute top-20 right-10 w-32 h-32 bg-orange-50/40 rounded-full blur-3xl" />
+            <div className="absolute top-40 left-8 w-24 h-24 bg-pink-50/30 rounded-full blur-2xl" />
+            <div className="absolute bottom-32 right-12 w-40 h-40 bg-yellow-50/30 rounded-full blur-3xl" />
+            <div className="absolute bottom-20 left-16 w-28 h-28 bg-orange-50/25 rounded-full blur-2xl" />
+            <div className="absolute top-32 left-20 w-2 h-2 bg-orange-200/40 rounded-full" />
+            <div className="absolute top-48 right-24 w-1.5 h-1.5 bg-pink-200/40 rounded-full" />
+            <div className="absolute bottom-40 left-12 w-2 h-2 bg-yellow-200/40 rounded-full" />
+            <div className="absolute bottom-28 right-20 w-1.5 h-1.5 bg-orange-200/30 rounded-full" />
+          </div>
+
+          {/* 主页面内容 */}
+          {view === 'main' && (
+            <div className="h-full overflow-y-auto no-scrollbar relative z-10">
+              <AnimatePresence mode="wait">
+                {/* 首页：探索 */}
                 {tab === 'explore' && (
                   <motion.div
                     key="explore"
                     {...pageTransition}
-                    className="h-full flex flex-col justify-between px-8 py-6 min-h-0"
+                    className="h-full flex flex-col justify-between px-8 py-8"
                   >
-                    <div className="mb-6 shrink-0">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-orange-50 rounded-full text-[#FF8C42] text-[10px] font-black tracking-widest uppercase mb-3">
-                        <Sparkles size={12} /> AI Powered
+                    <div className="mb-8">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-orange-50 rounded-full text-[#FF8C42] text-[10px] font-black tracking-widest uppercase mb-4">
+                        AI Powered
                       </div>
-                      <h1 className="text-[32px] leading-tight font-black text-[#1A1A1A] mb-2">
-                        把视频<br/><span className="text-[#FF8C42]">秒变</span>精美菜谱
+                      <h1 className="text-[32px] leading-tight font-black text-[#1A1A1A] mb-3">
+                        美食视频<br/><span className="text-[#FF8C42]">生成</span>专属菜谱
                       </h1>
                       <p className="text-[13px] text-[#94A3B8] font-medium leading-relaxed">
                         一键解析烹饪视频，自动生成专业步骤<br/>让下厨变得简单又有序 ✨
                       </p>
                     </div>
 
-                    <div className="shrink-0 bg-white rounded-[32px] p-5 shadow-[0_20px_40px_-12px_rgba(255,140,66,0.08)] border border-orange-50 mb-5">
+                    <div className="bg-white rounded-[32px] p-5 shadow-[0_20px_40px_-12px_rgba(255,140,66,0.08)] border border-orange-50 mb-6">
                       <div className="relative mb-3 group">
-                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-orange-500 z-10"><Video size={18} /></div>
-                        <input 
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-orange-500 z-10">
+                          <Video size={18} />
+                        </div>
+                        <input
                           value={videoLink}
                           onChange={(e) => setVideoLink(e.target.value)}
-                          className="w-full h-[52px] bg-orange-50/40 border-2 border-orange-200 shadow-inner rounded-2xl pl-12 pr-4 text-sm font-semibold outline-none placeholder:text-slate-400 focus:border-[#FF8C42] focus:bg-white focus:ring-4 focus:ring-orange-100/50 transition-all py-3.5" 
-                          placeholder="粘贴视频链接到这里..." 
+                          className="w-full h-[52px] bg-orange-50/40 border-2 border-orange-200 shadow-inner rounded-2xl pl-12 pr-4 text-sm font-semibold outline-none placeholder:text-slate-400 focus:border-[#FF8C42] focus:bg-white focus:ring-4 focus:ring-orange-100/50 transition-all py-3.5"
+                          placeholder="粘贴视频链接到这里..."
                         />
                       </div>
-                      <button 
+                      <button
                         onClick={handleGenerate}
                         disabled={view === 'loading'}
                         className="w-full h-[52px] bg-[#FF8C42] text-white font-black rounded-2xl flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-orange-200/50 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Zap size={18} fill="currentColor" /> 开始生成菜谱
                       </button>
-                      <div className="mt-3 flex justify-center items-center gap-2">
+                      <div className="mt-3.5 flex justify-center items-center gap-2">
                         <div className="flex -space-x-2">
                           {['🥗', '🍳', '🍜'].map((emoji, i) => (
-                            <div key={i} className="w-6 h-6 rounded-full border-2 border-white bg-slate-50 flex items-center justify-center text-[10px] shadow-sm overflow-hidden">{emoji}</div>
+                            <div key={i} className="w-6 h-6 rounded-full border-2 border-white bg-slate-50 flex items-center justify-center text-[10px] shadow-sm overflow-hidden">
+                              {emoji}
+                            </div>
                           ))}
                         </div>
                         <p className="text-[11px] text-slate-400 font-bold">
@@ -409,16 +493,20 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 shrink-0">
+                    <div className="grid grid-cols-2 gap-4 pb-2">
                       <div className="bg-[#FFF9F2] p-4 rounded-[28px] border border-orange-100/50">
-                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-orange-400 shadow-sm mb-3"><Zap size={20} /></div>
+                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-orange-400 shadow-sm mb-3">
+                          <Zap size={20} />
+                        </div>
                         <h4 className="font-black text-[#1A1A1A] text-sm mb-1">快速解析</h4>
-                        <p className="text-[10px] text-slate-400 font-bold">秒速解析视频内容</p>
+                        <p className="text-[10px] text-slate-400 font-bold">精准解析视频内容</p>
                       </div>
                       <div className="bg-[#F2F7FF] p-4 rounded-[28px] border border-blue-100/50">
-                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-blue-400 shadow-sm mb-3"><FileText size={20} /></div>
+                        <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-blue-400 shadow-sm mb-3">
+                          <FileText size={20} />
+                        </div>
                         <h4 className="font-black text-[#1A1A1A] text-sm mb-1">智能提取</h4>
-                        <p className="text-[10px] text-slate-400 font-bold">整理食材和步骤</p>
+                        <p className="text-[10px] text-slate-400 font-bold">自动整理食材与步骤</p>
                       </div>
                     </div>
                   </motion.div>
@@ -440,7 +528,7 @@ export default function App() {
                     ) : (
                       <div className="space-y-10">
                         {['早餐', '午餐', '晚餐'].map(cat => {
-                          const items = inspirations.filter(i => i.type === cat);
+                          const items = inspirations.filter(i => (i.type || '其他') === cat);
                           if (items.length === 0) return null;
                           return (
                             <div key={cat} className="space-y-4">
@@ -449,15 +537,15 @@ export default function App() {
                                 <h3 className="text-[15px] font-black text-[#1A1A1A] opacity-80">{cat}系列</h3>
                               </div>
                               <div className="grid grid-cols-1 gap-5">
-                                {items.map(item => (
-                                  <div key={item.id} onClick={() => openRecipe(item)} className="bg-white rounded-[32px] overflow-hidden border border-slate-100 shadow-sm active:scale-[0.98] transition-all cursor-pointer">
-                                    <div className="h-32 flex items-center justify-center text-5xl" style={{backgroundColor: item.color}}>{item.emoji}</div>
+                                {items.map((item, idx) => (
+                                  <div key={item.id || `insp-${cat}-${idx}`} onClick={() => openRecipe(item)} className="bg-white rounded-[32px] overflow-hidden border border-slate-100 shadow-sm active:scale-[0.98] transition-all cursor-pointer">
+                                    <div className="h-32 flex items-center justify-center text-5xl" style={{ backgroundColor: item.color || '#F0F9FF' }}>{item.emoji || '🍳'}</div>
                                     <div className="p-5">
                                       <div className="flex justify-between items-start mb-2">
-                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${cat === '早餐' ? 'bg-orange-50 text-orange-600' : cat === '午餐' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>{item.time}</span>
+                                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${cat === '早餐' ? 'bg-orange-50 text-orange-600' : cat === '午餐' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>{item.time || ''}</span>
                                       </div>
-                                  <h4 className="font-black text-lg text-[#1A1A1A] mb-1">{item.title}</h4>
-                                  <p className="text-sm text-slate-400 font-medium line-clamp-1">{item.description}</p>
+                                      <h4 className="font-black text-lg text-[#1A1A1A] mb-1">{item.title || '菜谱'}</h4>
+                                      <p className="text-sm text-slate-400 font-medium line-clamp-1">{item.description || ''}</p>
                                     </div>
                                   </div>
                                 ))}
@@ -506,15 +594,16 @@ export default function App() {
                     )}
                   </motion.div>
                 )}
-              </div>
-            )}
-          </AnimatePresence>
+              </AnimatePresence>
+            </div>
+          )}
 
-          {/* Loading 蒙层 */}
+          {/* Loading 状态 */}
           {view === 'loading' && (
             <div className="absolute inset-0 bg-orange-50 z-50 flex flex-col items-center justify-center px-10">
               <div className="w-24 h-24 bg-white rounded-[32px] shadow-lg flex items-center justify-center text-5xl animate-bounce">🍳</div>
               <p className="text-[18px] text-[#1A1A1A] mt-8 font-black">AI 正在努力解析中...</p>
+              <p className="text-[13px] text-slate-400 font-medium mt-3">可能需要等待 1-2 分钟 ⏱️</p>
             </div>
           )}
 
@@ -526,60 +615,108 @@ export default function App() {
                 <motion.div initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="absolute inset-0 bg-white z-[100] overflow-y-auto rounded-t-[40px] mt-20 pb-20 no-scrollbar">
                   <div className="sticky top-0 bg-white/90 backdrop-blur-md px-8 py-6 flex justify-between items-center z-10">
                     <button onClick={() => setView('main')} className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-600"><ChevronLeft /></button>
-                    <div className="relative">
-                      <button onClick={handleSave} className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center">
-                        <Heart size={20} fill={favorites.find(r => r.id === selectedRecipe.id) ? "#FF8C42" : "none"} className="text-[#FF8C42]" />
-                      </button>
-                      {showSaveGuide && !favorites.find(r => r.id === selectedRecipe.id) && (
-                        <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="absolute top-14 right-0 bg-[#1A1A1A] text-white text-[12px] font-bold px-4 py-2 rounded-xl shadow-xl whitespace-nowrap z-20">
-                          收藏到碗里 ✨
-                          <div className="absolute -top-1 right-4 w-2 h-2 bg-[#1A1A1A] rotate-45" />
-                        </motion.div>
+                    <div className="flex items-center gap-2">
+                      {canEditRecipe && !isEditMode && (
+                        <button onClick={startEdit} className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-slate-600" title="编辑"><Pencil size={18} /></button>
                       )}
+                      <div className="relative">
+                        <button onClick={handleSave} className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center">
+                          <Heart size={20} fill={favorites.find(r => r.id === selectedRecipe.id) ? "#FF8C42" : "none"} className="text-[#FF8C42]" />
+                        </button>
+                        {showSaveGuide && !favorites.find(r => r.id === selectedRecipe.id) && (
+                          <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="absolute top-14 right-0 bg-[#1A1A1A] text-white text-[12px] font-bold px-4 py-2 rounded-xl shadow-xl whitespace-nowrap z-20">
+                            收藏到碗里 ✨
+                            <div className="absolute -top-1 right-4 w-2 h-2 bg-[#1A1A1A] rotate-45" />
+                          </motion.div>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="px-8 mt-2">
                     {selectedRecipe.imageUrl && (
                       <div className="w-full h-56 rounded-[32px] overflow-hidden mb-8 shadow-xl border-4 border-white"><img src={selectedRecipe.imageUrl} alt="" className="w-full h-full object-cover" /></div>
                     )}
-                    <h1 className="text-3xl font-black text-[#1A1A1A] mb-3 leading-tight">{selectedRecipe.title}</h1>
-                    <div className="flex items-center gap-3 mb-8">
-                      <span className="bg-orange-50 text-orange-600 px-3 py-1 rounded-full text-[12px] font-bold">{selectedRecipe.time}</span>
-                      <p className="text-[14px] text-slate-400 font-medium">{selectedRecipe.description}</p>
-                    </div>
-
-                    <div className="p-6 bg-slate-50 rounded-[32px] mb-10 border border-slate-100 shadow-inner">
-                      <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-4">食材清单</h5>
-                      <div className="space-y-3">
-                        {(selectedRecipe.ingredients ?? []).map((ing, i) => (
-                          <div key={i} className="flex items-center gap-3 text-[#1A1A1A] font-bold text-sm bg-white p-3 rounded-xl border border-slate-200/50 shadow-sm transition-all hover:translate-x-1">
-                            <div className="w-1.5 h-1.5 rounded-full bg-[#FF8C42]" /> {ing}
+                    {isEditMode ? (
+                      <>
+                        <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2">标题</label>
+                        <input value={editForm.title} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} className="w-full text-2xl font-black text-[#1A1A1A] mb-4 p-3 rounded-xl border border-slate-200 bg-white" placeholder="菜谱名称" />
+                        <div className="flex gap-3 mb-4">
+                          <div className="flex-1">
+                            <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2">时长</label>
+                            <input value={editForm.time} onChange={e => setEditForm(f => ({ ...f, time: e.target.value }))} className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold" placeholder="如 15 min" />
                           </div>
-                        ))}
-                        {!(selectedRecipe.ingredients?.length) && (
-                          <p className="text-slate-400 text-sm">暂无食材信息</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-6 px-1">烹饪步骤</h5>
-                    <div className="space-y-8 mb-10">
-                      {(selectedRecipe.steps ?? []).map((step, i) => (
-                        <div key={i} className="flex gap-4 group">
-                          <div className="flex-shrink-0 w-8 h-8 bg-orange-50 text-[#FF8C42] rounded-lg flex items-center justify-center font-black text-sm">{i+1}</div>
-                          <p className="text-[#1A1A1A] font-bold leading-relaxed text-[15px] pt-1.5">{step}</p>
+                          <div className="flex-1">
+                            <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2">类型</label>
+                            <select value={editForm.type} onChange={e => setEditForm(f => ({ ...f, type: e.target.value }))} className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold">
+                              {['早餐', '午餐', '晚餐', '其他'].map(t => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
                         </div>
-                      ))}
-                      {!(selectedRecipe.steps?.length) && (
-                        <p className="text-slate-400 text-sm">暂无步骤信息</p>
-                      )}
-                    </div>
-
-                    {selectedRecipe.tips && (
-                      <div className="p-6 bg-orange-50 rounded-[32px] mb-10 border border-orange-100">
-                        <h5 className="text-[11px] font-black text-orange-600 uppercase tracking-widest mb-3">💡 专业建议</h5>
-                        <p className="text-[14px] text-[#1A1A1A] font-bold leading-relaxed">{selectedRecipe.tips}</p>
-                      </div>
+                        <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2">简介</label>
+                        <textarea value={editForm.description} onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))} rows={2} className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 mb-6" placeholder="一句话描述" />
+                        <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3">食材清单</h5>
+                        <div className="space-y-2 mb-4">
+                          {editForm.ingredients.map((ing, i) => (
+                            <div key={i} className="flex gap-2 items-center">
+                              <input value={ing} onChange={e => setEditForm(f => ({ ...f, ingredients: f.ingredients.map((_, j) => j === i ? e.target.value : _) }))} className="flex-1 p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold" placeholder={`食材 ${i + 1}`} />
+                              <button type="button" onClick={() => setEditForm(f => ({ ...f, ingredients: f.ingredients.filter((_, j) => j !== i) }))} className="p-2 text-slate-400 hover:text-red-500"><X size={18} /></button>
+                            </div>
+                          ))}
+                          <button type="button" onClick={() => setEditForm(f => ({ ...f, ingredients: [...f.ingredients, ''] }))} className="w-full py-2.5 rounded-xl border border-dashed border-slate-300 text-slate-500 text-sm font-bold">+ 添加一行食材</button>
+                        </div>
+                        <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-3">烹饪步骤</h5>
+                        <div className="space-y-3 mb-6">
+                          {editForm.steps.map((step, i) => (
+                            <div key={i} className="flex gap-2 items-start">
+                              <span className="flex-shrink-0 w-7 h-7 bg-orange-50 text-[#FF8C42] rounded-lg flex items-center justify-center font-black text-xs">{i + 1}</span>
+                              <input value={step} onChange={e => setEditForm(f => ({ ...f, steps: f.steps.map((_, j) => j === i ? e.target.value : _) }))} className="flex-1 p-3 rounded-xl border border-slate-200 bg-white text-sm font-bold" placeholder={`步骤 ${i + 1}`} />
+                              <button type="button" onClick={() => setEditForm(f => ({ ...f, steps: f.steps.filter((_, j) => j !== i) }))} className="p-2 text-slate-400 hover:text-red-500 mt-1"><X size={18} /></button>
+                            </div>
+                          ))}
+                          <button type="button" onClick={() => setEditForm(f => ({ ...f, steps: [...f.steps, ''] }))} className="w-full py-2.5 rounded-xl border border-dashed border-slate-300 text-slate-500 text-sm font-bold">+ 添加一步</button>
+                        </div>
+                        <label className="block text-[11px] font-black text-slate-400 uppercase tracking-widest mb-2">💡 专业建议（选填）</label>
+                        <textarea value={editForm.tips} onChange={e => setEditForm(f => ({ ...f, tips: e.target.value }))} rows={2} className="w-full p-3 rounded-xl border border-slate-200 bg-white text-sm font-medium mb-8" placeholder="小贴士" />
+                        <div className="flex gap-3 pb-8">
+                          <button onClick={saveEdit} disabled={savingEdit} className="flex-1 h-12 bg-[#FF8C42] text-white font-black rounded-2xl flex items-center justify-center gap-2 disabled:opacity-60"><Check size={18} /> {savingEdit ? '保存中…' : '保存'}</button>
+                          <button onClick={cancelEdit} className="h-12 px-6 text-slate-500 font-bold rounded-2xl border border-slate-200">取消</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <h1 className="text-3xl font-black text-[#1A1A1A] mb-3 leading-tight">{selectedRecipe.title}</h1>
+                        <div className="flex items-center gap-3 mb-8">
+                          <span className="bg-orange-50 text-orange-600 px-3 py-1 rounded-full text-[12px] font-bold">{selectedRecipe.time}</span>
+                          <p className="text-[14px] text-slate-400 font-medium">{selectedRecipe.description}</p>
+                        </div>
+                        <div className="p-6 bg-slate-50 rounded-[32px] mb-10 border border-slate-100 shadow-inner">
+                          <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-4">食材清单</h5>
+                          <div className="space-y-3">
+                            {(selectedRecipe.ingredients ?? []).map((ing, i) => (
+                              <div key={i} className="flex items-center gap-3 text-[#1A1A1A] font-bold text-sm bg-white p-3 rounded-xl border border-slate-200/50 shadow-sm transition-all hover:translate-x-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-[#FF8C42]" /> {ing}
+                              </div>
+                            ))}
+                            {!(selectedRecipe.ingredients?.length) && <p className="text-slate-400 text-sm">暂无食材信息</p>}
+                          </div>
+                        </div>
+                        <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest mb-6 px-1">烹饪步骤</h5>
+                        <div className="space-y-8 mb-10">
+                          {(selectedRecipe.steps ?? []).map((step, i) => (
+                            <div key={i} className="flex gap-4 group">
+                              <div className="flex-shrink-0 w-8 h-8 bg-orange-50 text-[#FF8C42] rounded-lg flex items-center justify-center font-black text-sm">{i+1}</div>
+                              <p className="text-[#1A1A1A] font-bold leading-relaxed text-[15px] pt-1.5">{step}</p>
+                            </div>
+                          ))}
+                          {!(selectedRecipe.steps?.length) && <p className="text-slate-400 text-sm">暂无步骤信息</p>}
+                        </div>
+                        {selectedRecipe.tips && (
+                          <div className="p-6 bg-orange-50 rounded-[32px] mb-10 border border-orange-100">
+                            <h5 className="text-[11px] font-black text-orange-600 uppercase tracking-widest mb-3">💡 专业建议</h5>
+                            <p className="text-[14px] text-[#1A1A1A] font-bold leading-relaxed">{selectedRecipe.tips}</p>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </motion.div>

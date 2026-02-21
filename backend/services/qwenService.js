@@ -6,52 +6,64 @@ const axios = require('axios');
  */
 class QwenService {
   constructor() {
-    this.apiKey = process.env.DASHSCOPE_API_KEY;
-    this.baseUrl = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation';
-    this.model = process.env.QWEN_MODEL || 'qwen-turbo';
+    this._apiKey = process.env.DASHSCOPE_API_KEY;
+    this.baseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+    this._model = process.env.QWEN_MODEL || 'qwen3.5-plus';
+  }
+  get apiKey() {
+    return process.env.DASHSCOPE_API_KEY || this._apiKey || '';
+  }
+  get model() {
+    return process.env.QWEN_MODEL || this._model || 'qwen3.5-plus';
   }
 
   /**
-   * 调用通义千问生成内容
+   * 调用通义千问（OpenAI 兼容接口，支持 qwen3.5-plus）
+   * 超时自动重试 1 次；可设 QWEN_TIMEOUT_MS、QWEN_MODEL
    */
   async chat(messages, options = {}) {
-    if (!this.apiKey) {
-      throw new Error('未配置 DASHSCOPE_API_KEY');
+    const apiKey = this.apiKey;
+    if (!apiKey || !apiKey.trim()) {
+      throw new Error('未配置 DASHSCOPE_API_KEY，请在 backend/.env 中配置');
     }
+    const msgList = Array.isArray(messages) ? messages : [{ role: 'user', content: messages }];
+    const body = {
+      model: this.model,
+      messages: msgList,
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.max_tokens ?? 2000
+    };
+    const timeoutMs = Number(process.env.QWEN_TIMEOUT_MS) || options.timeout || 240000;
+    const config = {
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      timeout: timeoutMs
+    };
 
-    const response = await axios.post(
-      this.baseUrl,
-      {
-        model: this.model,
-        input: {
-          messages: Array.isArray(messages) ? messages : [{ role: 'user', content: messages }]
-        },
-        parameters: {
-          result_format: 'message',
-          temperature: options.temperature ?? 0.7,
-          max_tokens: options.max_tokens ?? 2000,
-          ...options
+    const doRequest = () => axios.post(this.baseUrl, body, config);
+
+    let lastErr;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await doRequest();
+        const data = response.data;
+        if (data.error && data.error.message) throw new Error(data.error.message);
+        const content = data.choices?.[0]?.message?.content;
+        if (!content) throw new Error('通义千问返回内容为空');
+        return content;
+      } catch (err) {
+        lastErr = err;
+        const isTimeout = err.code === 'ECONNABORTED' || (err.message && err.message.includes('超时'));
+        const apiMsg = err.response?.data?.message || err.response?.data?.error;
+        if (apiMsg) throw new Error(`通义千问接口异常: ${apiMsg}`);
+        if (isTimeout && attempt === 1) {
+          console.warn('⏱️ 通义千问首次请求超时，正在重试一次...');
+          continue;
         }
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 60000
+        if (isTimeout) throw new Error('通义千问请求超时，请稍后重试或增大 .env 中 QWEN_TIMEOUT_MS');
+        throw err;
       }
-    );
-
-    if (response.data.code) {
-      throw new Error(response.data.message || '通义千问调用失败');
     }
-
-    const content = response.data?.output?.choices?.[0]?.message?.content;
-    if (!content) {
-      throw new Error('通义千问返回内容为空');
-    }
-
-    return content;
+    throw lastErr;
   }
 
   /**
@@ -257,7 +269,10 @@ ${textSource}
       const recipeData = JSON.parse(jsonMatch[0]);
 
       const colorMap = { '早餐': '#FFF7ED', '午餐': '#F5F3FF', '晚餐': '#EFF6FF', '其他': '#F0F9FF' };
-      
+      const validTypes = ['早餐', '午餐', '晚餐', '其他'];
+      const rawType = (recipeData.type || '其他').trim();
+      const type = validTypes.includes(rawType) ? rawType : (validTypes.find(t => rawType.includes(t)) || '其他');
+
       // 处理 ingredients：如果包含【主料】【辅料】【调料】标记，保持原样；否则添加 emoji
       let ingredients = recipeData.ingredients || [];
       if (ingredients.length > 0 && !ingredients[0].includes('【')) {
@@ -277,12 +292,12 @@ ${textSource}
         title: recipeData.title || '美味菜谱 🍳',
         description: recipeData.description || 'AI生成的精美菜谱',
         time: recipeData.time || '15 min',
-        type: recipeData.type || '其他',
+        type: type,
         emoji: recipeData.emoji || '🍳',
         ingredients: ingredients,
         steps: recipeData.steps || [],
-        tips: recipeData.tips || '', // 新增 tips 字段
-        color: colorMap[recipeData.type] || '#F0F9FF'
+        tips: recipeData.tips || '',
+        color: colorMap[type] || '#F0F9FF'
       };
     } catch (e) {
       console.error('菜谱JSON解析失败:', e.message);

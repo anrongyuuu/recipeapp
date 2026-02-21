@@ -5,6 +5,42 @@ const Recipe = require('../models/Recipe');
 const imageGenerator = require('../services/imageGenerator');
 
 /**
+ * 从每日灵感创建菜谱（再收藏）：灵感菜谱不在 Recipe 表，先建一条再加入收藏
+ * POST /api/recipe/from-inspiration
+ * Body: { title, description?, emoji?, type?, time?, color?, ingredients?, steps?, tips?, imageUrl? }
+ */
+router.post('/from-inspiration', wechatAuth, async (req, res) => {
+  try {
+    const { title, description, emoji, type, time, color, ingredients, steps, tips, imageUrl } = req.body;
+    if (!title || typeof title !== 'string' || !title.trim()) {
+      return res.status(400).json({ error: '请提供菜谱标题' });
+    }
+    const validType = ['早餐', '午餐', '晚餐', '其他'].includes(type) ? type : '其他';
+    const recipe = new Recipe({
+      title: title.trim(),
+      description: description || '',
+      emoji: emoji || '🍳',
+      type: validType,
+      time: time || '15 min',
+      color: color || '#F0F9FF',
+      ingredients: Array.isArray(ingredients) ? ingredients : [],
+      steps: Array.isArray(steps) ? steps : [],
+      tips: tips || '',
+      imageUrl: imageUrl || '',
+      userId: req.user._id,
+      isPublic: false
+    });
+    await recipe.save();
+    res.json({
+      success: true,
+      data: { id: recipe._id, ...recipe.toObject() }
+    });
+  } catch (error) {
+    res.status(500).json({ error: '创建菜谱失败', details: error.message });
+  }
+});
+
+/**
  * 获取菜谱详情
  * GET /api/recipe/:id
  */
@@ -28,6 +64,29 @@ router.get('/:id', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: '获取菜谱失败', details: error.message });
+  }
+});
+
+/**
+ * 更新菜谱（用户自定义编辑）
+ * PUT /api/recipe/:id
+ */
+router.put('/:id', async (req, res) => {
+  try {
+    const recipe = await Recipe.findById(req.params.id);
+    if (!recipe) return res.status(404).json({ error: '菜谱不存在' });
+    const { title, description, time, type, ingredients, steps, tips } = req.body;
+    if (title !== undefined) recipe.title = String(title).trim() || recipe.title;
+    if (description !== undefined) recipe.description = String(description);
+    if (time !== undefined) recipe.time = String(time).trim() || recipe.time;
+    if (type !== undefined && ['早餐', '午餐', '晚餐', '其他'].includes(type)) recipe.type = type;
+    if (Array.isArray(ingredients)) recipe.ingredients = ingredients.map(s => String(s).trim()).filter(Boolean);
+    if (Array.isArray(steps)) recipe.steps = steps.map(s => String(s).trim()).filter(Boolean);
+    if (tips !== undefined) recipe.tips = String(tips);
+    await recipe.save();
+    res.json({ success: true, data: recipe });
+  } catch (error) {
+    res.status(500).json({ error: '更新菜谱失败', details: error.message });
   }
 });
 

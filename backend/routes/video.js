@@ -7,7 +7,6 @@ const VideoParser = require('../services/videoParser');
 const YtdlpParser = require('../services/ytdlpParser');
 const ossHelper = require('../services/ossHelper');
 const aiRecipeGenerator = require('../services/aiRecipeGenerator');
-const contentSafetyService = require('../services/contentSafetyService');
 const Recipe = require('../models/Recipe');
 
 /**
@@ -28,25 +27,6 @@ router.post('/parse', wechatAuth, async (req, res) => {
     // 解析视频信息（标题、描述、缩略图等）
     console.log('📹 开始解析视频:', url);
     const videoInfo = await VideoParser.parseWithAPI(url);
-
-    // 安全检查：检查视频是否为美食相关内容
-    console.log('🔒 进行内容安全检查...');
-    const videoCheck = await contentSafetyService.checkVideoInfo(videoInfo);
-    if (!videoCheck.safe) {
-      console.warn('❌ 内容安全检查失败:', videoCheck.reason);
-      return res.status(400).json({ 
-        error: '视频内容不符合要求，请上传美食相关视频',
-        reason: videoCheck.reason 
-      });
-    }
-    if (!videoCheck.isFoodRelated) {
-      console.warn('⚠️ 视频可能不是美食相关内容:', videoCheck.reason);
-      return res.status(400).json({ 
-        error: '请上传美食/烹饪相关的视频',
-        reason: '视频内容与美食无关'
-      });
-    }
-    console.log('✅ 内容安全检查通过');
 
     // 视频封面：若有 thumbnail 且配置了 OSS，下载并上传到 OSS，得到长期可用的 URL
     if (videoInfo.thumbnail && videoInfo.thumbnail.startsWith('http') && ossHelper.isConfigured()) {
@@ -90,23 +70,21 @@ router.post('/parse', wechatAuth, async (req, res) => {
       }
     }
     
-    // 阿里云 ASR 转写（若有 mediaUrl）+ 通义千问生成菜谱
     console.log('🤖 开始生成菜谱（通义千问 + 阿里云 ASR）...');
     let recipeData;
+    let isFallback = false;
     try {
-      recipeData = await aiRecipeGenerator.generateWithAI(videoInfo);
+      const result = await aiRecipeGenerator.generateWithAI(videoInfo);
+      recipeData = result.recipeData ?? result;
+      isFallback = result.isFallback === true;
+      if (isFallback) console.warn('⚠️ 本次返回模拟菜谱，请检查 DASHSCOPE 或 QWEN_TIMEOUT_MS');
     } catch (e) {
-      // 如果是安全检查失败，返回明确的错误信息
       if (e.message && (e.message.includes('不当内容') || e.message.includes('与美食无关') || e.message.includes('安全检查'))) {
-        return res.status(400).json({
-          error: '内容不符合要求',
-          details: e.message
-        });
+        return res.status(400).json({ error: '内容不符合要求', details: e.message });
       }
-      throw e; // 其他错误继续抛出
+      throw e;
     }
     
-    // 保存菜谱到数据库
     const recipe = new Recipe({
       ...recipeData,
       videoUrl: url,
@@ -117,14 +95,14 @@ router.post('/parse', wechatAuth, async (req, res) => {
     
     await recipe.save();
     
-    // 返回生成的菜谱
     res.json({
       success: true,
       data: {
         id: recipe._id,
         ...recipeData,
         videoUrl: url,
-        videoSource: videoInfo.platform
+        videoSource: videoInfo.platform,
+        isFallback: isFallback
       }
     });
   } catch (error) {

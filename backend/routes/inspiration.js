@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const DailyInspiration = require('../models/DailyInspiration');
-const Recipe = require('../models/Recipe');
 const { runDailyInspiration } = require('../jobs/dailyInspiration');
 
 /**
@@ -35,7 +34,7 @@ router.get('/daily', async (req, res) => {
 });
 
 /**
- * 获取灵感列表（今日灵感 + 公开菜谱，兼容前端）
+ * 获取灵感列表（仅今日每日灵感，不混入用户解析的公开菜谱，避免重复与错乱）
  * GET /api/inspiration/list
  */
 router.get('/list', async (req, res) => {
@@ -44,19 +43,20 @@ router.get('/list', async (req, res) => {
     today.setHours(0, 0, 0, 0);
 
     const dailyDoc = await DailyInspiration.findOne({ date: today }).lean();
-    const dailyRecipes = (dailyDoc?.recipes || []).map(r => ({ ...r, id: `insp_${r.type}_${r.title}`, source: 'daily' }));
+    const dailyRecipes = (dailyDoc?.recipes || []).map((r, i) => ({
+      ...r,
+      id: `insp_${i}_${(r.type || '其他').slice(0, 2)}_${(r.title || '').slice(0, 10)}`,
+      source: 'daily'
+    }));
 
-    const publicRecipes = await Recipe.find({ isPublic: true })
-      .limit(20)
-      .select('title description emoji time type color imageUrl')
-      .lean();
+    const typeOrder = { '早餐': 0, '午餐': 1, '晚餐': 2, '其他': 3 };
+    const list = dailyRecipes.sort(
+      (a, b) => (typeOrder[a.type] ?? 3) - (typeOrder[b.type] ?? 3)
+    );
 
     res.json({
       success: true,
-      data: {
-        daily: dailyRecipes,
-        public: publicRecipes
-      }
+      data: list
     });
   } catch (error) {
     res.status(500).json({ error: '获取灵感列表失败', details: error.message });

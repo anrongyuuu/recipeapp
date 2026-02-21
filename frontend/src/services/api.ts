@@ -114,7 +114,7 @@ class ApiService {
    * 获取灵感列表（今日灵感 + 公开菜谱）
    */
   async getInspirationList(): Promise<Recipe[]> {
-    const response = await this.request<Recipe[]>('/api/inspiration/list', {
+    const response = await this.request<Recipe[] | { daily?: Recipe[]; public?: (Recipe & { _id?: string })[] }>('/api/inspiration/list', {
       method: 'GET',
     });
 
@@ -122,7 +122,13 @@ class ApiService {
       return [];
     }
 
-    return response.data;
+    const data = response.data;
+    if (Array.isArray(data)) {
+      return data.map((r: Recipe & { _id?: string }) => ({ ...r, id: String(r.id ?? r._id ?? '') }));
+    }
+    const daily = (data as { daily?: Recipe[] }).daily ?? [];
+    const pub = (data as { public?: (Recipe & { _id?: string })[] }).public ?? [];
+    return [...daily, ...pub.map((r: Recipe & { _id?: string }) => ({ ...r, id: String(r.id ?? r._id ?? '') }))];
   }
 
   /**
@@ -138,6 +144,24 @@ class ApiService {
     }
 
     return response.data;
+  }
+
+  /**
+   * 更新菜谱（自定义编辑）
+   */
+  async updateRecipe(
+    id: string,
+    payload: Partial<Pick<Recipe, 'title' | 'description' | 'time' | 'type' | 'ingredients' | 'steps' | 'tips'>>
+  ): Promise<Recipe> {
+    const response = await this.request<Recipe>(`/api/recipe/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    if (!response.success || !response.data) {
+      throw new Error(response.error || '更新失败');
+    }
+    const r = response.data as Recipe & { _id?: string };
+    return { ...r, id: String(r.id ?? r._id ?? id) };
   }
 
   /**
@@ -171,6 +195,33 @@ class ApiService {
     }
 
     return response.data;
+  }
+
+  /**
+   * 从每日灵感创建菜谱（返回新菜谱 id，用于再收藏）
+   */
+  async createRecipeFromInspiration(recipe: Partial<Recipe>): Promise<Recipe> {
+    const payload = {
+      title: recipe.title || '未命名菜谱',
+      description: recipe.description ?? '',
+      emoji: recipe.emoji ?? '🍳',
+      type: recipe.type ?? '其他',
+      time: recipe.time ?? '15 min',
+      color: recipe.color ?? '#F0F9FF',
+      ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
+      steps: Array.isArray(recipe.steps) ? recipe.steps : [],
+      tips: recipe.tips ?? '',
+      imageUrl: recipe.imageUrl ?? ''
+    };
+    const response = await this.request<Recipe & { _id?: string }>('/api/recipe/from-inspiration', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!response.success || !response.data) {
+      throw new Error(response.error || '创建失败');
+    }
+    const r = response.data;
+    return { ...r, id: String(r.id ?? r._id ?? '') };
   }
 
   /**

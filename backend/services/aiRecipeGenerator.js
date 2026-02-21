@@ -21,17 +21,6 @@ class AIRecipeGenerator {
         console.log('🎤 正在 ASR 转写（约 30 秒～2 分钟）...');
         const transcript = await aliyunAsrService.transcribe(videoInfo.mediaUrl);
         if (transcript && transcript.length > 20) {
-          // 安全检查：检查转写内容
-          console.log('🔒 检查 ASR 转写内容安全性...');
-          const transcriptCheck = await contentSafetyService.checkTranscript(transcript);
-          if (!transcriptCheck.safe) {
-            throw new Error(`转写内容包含不当内容: ${transcriptCheck.reason}`);
-          }
-          if (!transcriptCheck.isFoodRelated) {
-            throw new Error('转写内容与美食无关，请上传美食相关视频');
-          }
-          console.log('✅ ASR 转写内容安全检查通过');
-          
           textSource = `【视频旁白/解说转写内容】\n${transcript}\n\n【视频标题】${videoInfo.title || ''}\n【视频描述】${videoInfo.description || ''}`;
           console.log('✅ ASR 转写完成，字数:', transcript.length);
         }
@@ -47,22 +36,21 @@ class AIRecipeGenerator {
     try {
       console.log('📝 正在通义千问生成菜谱...');
       const recipeData = await qwenService.generateRecipeFromText(textSource);
-      
-      // 最终安全检查：检查生成的菜谱内容
       console.log('🔒 检查生成的菜谱内容安全性...');
       const recipeCheck = await contentSafetyService.checkRecipe(recipeData);
       if (!recipeCheck.safe) {
         throw new Error(`生成的菜谱包含不当内容: ${recipeCheck.reason}`);
       }
       console.log('✅ 菜谱内容安全检查通过');
-      
-      return recipeData;
+      return { recipeData, isFallback: false };
     } catch (e) {
-      if (e.message && (e.message.includes('不当内容') || e.message.includes('安全检查'))) {
-        throw e; // 安全相关错误直接抛出
+      const msg = (e && typeof e === 'object' && e.message) ? String(e.message) : String(e != null ? e : '');
+      if (msg.includes('不当内容') || msg.includes('与美食无关') || msg.includes('安全检查')) {
+        throw e;
       }
-      console.error('通义千问生成失败，使用模拟数据:', e.message);
-      return this.generateMock(videoInfo);
+      console.error('❌ 通义千问生成失败，使用模拟数据:', msg);
+      const mockData = this.generateMock(videoInfo);
+      return { recipeData: mockData, isFallback: true };
     }
   }
 
