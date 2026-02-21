@@ -1,6 +1,4 @@
 // 简化版测试 - 如果这个能显示，说明问题在完整版 App.tsx
-import React from 'react';
-
 export default function SimpleApp() {
   return (
     <div style={{ 

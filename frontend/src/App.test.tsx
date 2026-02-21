@@ -1,6 +1,4 @@
 // 临时测试文件 - 检查 React 是否能正常渲染
-import React from 'react';
-
 export default function TestApp() {
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial' }}>

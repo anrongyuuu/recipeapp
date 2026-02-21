@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  ChevronLeft, Bookmark, Heart, 
-  Sparkles, Sunrise, Sun, 
-  Moon, Compass, Clock, ChevronRight,
-  Video, Plus, Zap, FileText, Search, Pencil, Check, X
+import {
+  ChevronLeft, Bookmark, Heart,
+  Sunrise, Sun, Moon, Compass, ChevronRight,
+  Video, Plus, Zap, FileText, Pencil, Check, X
 } from 'lucide-react';
 import { apiService, Recipe } from './services/api';
 
@@ -133,6 +132,7 @@ export default function App() {
   const [editForm, setEditForm] = useState<{ title: string; description: string; time: string; type: string; ingredients: string[]; steps: string[]; tips: string }>({ title: '', description: '', time: '', type: '其他', ingredients: [], steps: [], tips: '' });
   const [savingEdit, setSavingEdit] = useState(false);
   const [detailSource, setDetailSource] = useState<'inspiration' | 'favorites' | 'generate'>('generate');
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Toast 逻辑
   const showToast = (msg: string) => {
@@ -198,12 +198,14 @@ export default function App() {
     }
 
     setView('loading');
+    setIsGenerating(true);
     try {
       const recipe = await apiService.parseVideo(videoLink.trim());
       
-      // 转换后端返回的数据格式为前端需要的格式
+      // 转换后端返回的数据格式为前端需要的格式（后端可能返回 _id）
+      const recipeWithId = recipe as Recipe & { _id?: string };
       const formattedRecipe: Recipe = {
-        id: recipe.id || String(recipe._id) || `recipe_${Date.now()}`,
+        id: recipe.id || String(recipeWithId._id ?? '') || `recipe_${Date.now()}`,
         type: recipe.type || '其他',
         title: recipe.title || '美味菜谱 🍳',
         description: recipe.description || '',
@@ -235,6 +237,8 @@ export default function App() {
       console.error('生成菜谱失败:', e);
       setView('main');
       showToast(`❌ ${e.message || '生成失败，请重试'}`);
+    } finally {
+      setIsGenerating(false);
     }
   };
 
@@ -474,7 +478,7 @@ export default function App() {
                       </div>
                       <button
                         onClick={handleGenerate}
-                        disabled={view === 'loading'}
+                        disabled={isGenerating}
                         className="w-full h-[52px] bg-[#FF8C42] text-white font-black rounded-2xl flex items-center justify-center gap-2 active:scale-95 transition-all shadow-lg shadow-orange-200/50 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Zap size={18} fill="currentColor" /> 开始生成菜谱
