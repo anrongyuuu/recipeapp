@@ -8,9 +8,20 @@ const axios = require('axios');
  */
 const wechatAuth = async (req, res, next) => {
   try {
-    const code = req.headers['x-wechat-code'] || req.body.code || req.query.code;
+    const code = (req.headers['x-wechat-code'] || req.body.code || req.query.code || '').trim();
     
-    if (!code) {
+    // 生产环境或无 code 时：允许游客模式（阿里云 Web 部署无需微信登录）
+    const allowGuest = process.env.NODE_ENV === 'production' || process.env.ALLOW_GUEST === 'true';
+    if (!code || code === 'guest' || code === 'web-guest') {
+      if (allowGuest) {
+        let user = await User.findOne({ openid: 'web_guest' });
+        if (!user) {
+          user = new User({ openid: 'web_guest', nickname: 'Web 访客' });
+          await user.save();
+        }
+        req.user = user;
+        return next();
+      }
       return res.status(401).json({ error: '缺少微信登录凭证' });
     }
 

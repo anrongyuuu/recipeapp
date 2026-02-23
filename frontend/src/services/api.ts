@@ -36,8 +36,8 @@ class ApiService {
 
   constructor() {
     this.baseUrl = API_BASE_URL;
-    // 开发环境使用测试 code，生产环境需要从微信获取
-    this.wechatCode = import.meta.env.DEV ? 'test-code' : '';
+    // 开发环境用 test-code；生产环境用 guest（Web 部署无需微信登录）
+    this.wechatCode = import.meta.env.DEV ? 'test-code' : 'guest';
   }
 
   /**
